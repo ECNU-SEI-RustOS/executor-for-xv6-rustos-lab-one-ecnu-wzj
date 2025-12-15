@@ -39,6 +39,7 @@ pub trait Syscall {
     fn sys_link(&mut self) -> SysResult;
     fn sys_mkdir(&mut self) -> SysResult;
     fn sys_close(&mut self) -> SysResult;
+    fn sys_trace(&mut self) -> SysResult;
 }
 
 impl Syscall for Proc {
@@ -126,6 +127,16 @@ impl Syscall for Proc {
         ret.map(|count| count as usize)
     }
 
+    /// Set trace mask for current process and its future children.
+    fn sys_trace(&mut self) -> SysResult {
+        let mask = self.arg_i32(0);
+        if mask < 0 {
+            return Err(())
+        }
+        self.data.get_mut().trace_mask = mask as usize;
+        Ok(0)
+    }
+
     /// Kill a process.
     /// Note: Other signals are not supported yet.
     fn sys_kill(&mut self) -> SysResult {
@@ -187,6 +198,13 @@ impl Syscall for Proc {
 
         #[cfg(feature = "trace_syscall")]
         println!("[{}].exec({}, {:#x}) = {:?}", self.excl.lock().pid, String::from_utf8_lossy(&path), uargv, result);
+
+        let guard = self.excl.lock();
+        if guard.pid == 1 {
+            let data = self.data.get_mut();
+            data.pagetable.as_ref().unwrap().vm_print(0);
+        }
+        drop(guard);
 
         if result.is_err() {
             syscall_warning(error);

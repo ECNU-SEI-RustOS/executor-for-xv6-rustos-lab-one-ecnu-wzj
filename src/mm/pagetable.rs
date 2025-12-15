@@ -118,6 +118,11 @@ impl PageTableEntry {
         PteFlag::from_bits_truncate(self.data)
     }
 
+    #[inline]
+    pub fn raw(&self) -> usize {
+        self.data
+    }
+
     /// # 功能说明
     /// 尝试克隆当前页表项所映射的物理页内容，返回一块新的内存页指针，  
     /// 该内存页保存原物理页的完整数据的副本。  
@@ -203,6 +208,30 @@ impl PageTable {
     /// that can be written in satp register
     pub fn as_satp(&self) -> usize {
         SATP_SV39 | ((self as *const PageTable as usize) >> PGSHIFT)
+    }
+
+    /// Recursively print valid entries in the page table.
+    pub fn vm_print(&self, level: usize) {
+        if level == 0 {
+            println!("page table 0x{:x}", self as *const _ as usize);
+        }
+        let indent = " ..".repeat(level + 1);
+        for (idx, pte) in self.data.iter().enumerate() {
+            if !pte.is_valid() {
+                continue;
+            }
+            println!(
+                "{}{}: pte 0x{:x} pa 0x{:x}",
+                indent,
+                idx,
+                pte.raw(),
+                pte.as_phys_addr().as_usize()
+            );
+            if !pte.is_leaf() {
+                let child = unsafe { &*pte.as_page_table() };
+                child.vm_print(level + 1);
+            }
+        }
     }
 
     /// # 功能说明

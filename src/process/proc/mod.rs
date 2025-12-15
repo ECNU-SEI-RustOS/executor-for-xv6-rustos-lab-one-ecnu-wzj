@@ -25,6 +25,32 @@ use self::syscall::Syscall;
 mod syscall;
 mod elf;
 
+const SYSCALL_NAMES: [&str; 23] = [
+    "",
+    "fork",
+    "exit",
+    "wait",
+    "pipe",
+    "read",
+    "kill",
+    "exec",
+    "fstat",
+    "chdir",
+    "dup",
+    "getpid",
+    "sbrk",
+    "sleep",
+    "uptime",
+    "open",
+    "write",
+    "mknod",
+    "unlink",
+    "link",
+    "mkdir",
+    "close",
+    "trace",
+];
+
 /// 进程状态枚举类型，表示操作系统内核中进程的不同生命周期状态。
 ///
 /// 该枚举用于进程调度与管理，反映进程当前的执行或等待状态，
@@ -94,6 +120,8 @@ pub struct ProcData {
     context: Context,
     /// 进程名称，最长16字节，通常用于调试和显示。
     name: [u8; 16],
+    /// syscall trace mask, inherited by children when set via `trace`.
+    trace_mask: usize,
     /// 进程打开的文件数组，元素为可选的引用计数智能指针。
     open_files: [Option<Arc<File>>; NFILE],
     /// 指向 TrapFrame 的裸指针，保存用户态寄存器临时值等信息。
@@ -112,6 +140,7 @@ impl ProcData {
             sz: 0,
             context: Context::new(),
             name: [0; 16],
+            trace_mask: 0,
             open_files: array![_ => None; NFILE],
             tf: ptr::null_mut(),
             pagetable: None,
@@ -283,6 +312,7 @@ impl ProcData {
             pgt.dealloc_proc_pagetable(self.sz);
         }
         self.sz = 0;
+        self.trace_mask = 0;
     }
 
     /// # 功能说明
@@ -520,14 +550,23 @@ impl Proc {
             19 => self.sys_link(),
             20 => self.sys_mkdir(),
             21 => self.sys_close(),
+            22 => self.sys_trace(),
             _ => {
                 panic!("unknown syscall num: {}", a7);
             }
         };
-        tf.a0 = match sys_result {
+        let ret_val = match sys_result {
             Ok(ret) => ret,
             Err(()) => -1isize as usize,
         };
+
+        let mask = unsafe { (*self.data.get()).trace_mask };
+        if a7 < SYSCALL_NAMES.len() && (mask & (1 << a7)) != 0 {
+            let pid = self.excl.lock().pid;
+            println!("{}: syscall {} -> {}", pid, SYSCALL_NAMES[a7], ret_val as isize);
+        }
+
+        tf.a0 = ret_val;
     }
 
     /// # 功能说明
@@ -687,6 +726,7 @@ impl Proc {
         // clone opened files and cwd
         cdata.open_files.clone_from(&pdata.open_files);
         cdata.cwd.clone_from(&pdata.cwd);
+        cdata.trace_mask = pdata.trace_mask;
         
         // copy process name
         cdata.name.copy_from_slice(&pdata.name);
