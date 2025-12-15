@@ -1,6 +1,7 @@
 use array_macro::array;
 
 use alloc::boxed::Box;
+use alloc::string::String;
 use core::{cmp::min, convert::TryFrom};
 use core::ptr;
 
@@ -913,6 +914,38 @@ impl PageTable {
             dst = unsafe { dst.offset(off_from_end as isize) };
             va.add_page();
             debug_assert_eq!(src, va.as_usize());
+        }
+    }
+
+    /// Print page table mappings recursively for debugging.
+    /// The indent depth grows when stepping into lower-level page tables.
+    pub fn vm_print(&self, level: usize) {
+        if level == 0 {
+            println!("page table {:#x}", self as *const PageTable as usize);
+        }
+        for (idx, pte) in self.data.iter().enumerate() {
+            if !pte.is_valid() {
+                continue;
+            }
+            let mut indent = String::new();
+            for i in 0..=level {
+                if i != 0 {
+                    indent.push(' ');
+                }
+                indent.push_str("..");
+            }
+            println!(
+                "{}{}: pte {:#x} pa {:#x}",
+                indent,
+                idx,
+                pte.data,
+                pte.as_phys_addr().as_usize()
+            );
+            if !pte.is_leaf() {
+                unsafe {
+                    pte.as_page_table().as_ref().unwrap().vm_print(level + 1);
+                }
+            }
         }
     }
 }

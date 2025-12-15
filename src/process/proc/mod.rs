@@ -102,6 +102,8 @@ pub struct ProcData {
     pub pagetable: Option<Box<PageTable>>,
     /// 进程当前工作目录的 inode。
     pub cwd: Option<Inode>,
+    /// 系统调用追踪掩码，按位标识需要追踪的系统调用。
+    pub trace_mask: u32,
 }
 
 
@@ -116,6 +118,7 @@ impl ProcData {
             tf: ptr::null_mut(),
             pagetable: None,
             cwd: None,
+            trace_mask: 0,
         }
     }
 
@@ -283,6 +286,7 @@ impl ProcData {
             pgt.dealloc_proc_pagetable(self.sz);
         }
         self.sz = 0;
+        self.trace_mask = 0;
     }
 
     /// # 功能说明
@@ -493,6 +497,32 @@ impl Proc {
     /// - 该函数应在内核上下文且进程排他访问时调用，避免数据竞争。
     /// - 系统调用执行过程中可能包含更底层的 `unsafe`，调用此函数时需确保整体安全环境。
     pub fn syscall(&mut self) {
+        const SYSCALL_NAMES: [&str; 23] = [
+            "",
+            "fork",
+            "exit",
+            "wait",
+            "pipe",
+            "read",
+            "kill",
+            "exec",
+            "fstat",
+            "chdir",
+            "dup",
+            "getpid",
+            "sbrk",
+            "sleep",
+            "uptime",
+            "open",
+            "write",
+            "mknod",
+            "unlink",
+            "link",
+            "mkdir",
+            "close",
+            "trace",
+        ];
+
         sstatus::intr_on();
 
         let tf = unsafe { self.data.get_mut().tf.as_mut().unwrap() };
@@ -520,14 +550,23 @@ impl Proc {
             19 => self.sys_link(),
             20 => self.sys_mkdir(),
             21 => self.sys_close(),
+            22 => self.sys_trace(),
             _ => {
                 panic!("unknown syscall num: {}", a7);
             }
         };
-        tf.a0 = match sys_result {
+        let ret_val = match sys_result {
             Ok(ret) => ret,
             Err(()) => -1isize as usize,
         };
+        tf.a0 = ret_val;
+
+        let mask = unsafe { (*self.data.get()).trace_mask };
+        if (mask as usize) & (1 << a7) != 0 {
+            let pid = self.excl.lock().pid;
+            let name = SYSCALL_NAMES.get(a7).copied().unwrap_or("unknown");
+            println!("{}: syscall {} -> {}", pid, name, ret_val as isize);
+        }
     }
 
     /// # 功能说明
@@ -687,6 +726,7 @@ impl Proc {
         // clone opened files and cwd
         cdata.open_files.clone_from(&pdata.open_files);
         cdata.cwd.clone_from(&pdata.cwd);
+        cdata.trace_mask = pdata.trace_mask;
         
         // copy process name
         cdata.name.copy_from_slice(&pdata.name);
